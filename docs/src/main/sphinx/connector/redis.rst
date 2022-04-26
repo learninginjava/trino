@@ -60,6 +60,7 @@ Property Name                           Description
 ``redis.key-prefix-schema-table``       Redis keys have schema-name:table-name prefix
 ``redis.key-delimiter``                 Delimiter separating schema_name and table_name if redis.key-prefix-schema-table is used
 ``redis.table-description-dir``         Directory containing table description files
+``redis.table-description-cache-ttl``   The cache time for redis table description files
 ``redis.hide-internal-columns``         Controls whether internal columns are part of the table schema or not
 ``redis.database-index``                Redis database index
 ``redis.password``                      Redis server password
@@ -76,8 +77,8 @@ For each table defined, a table description file (see below) may
 exist. If no table description file exists, the
 table only contains internal columns (see below).
 
-This property is required; there is no default and at least one table must be
-defined.
+This property is optional; the connector relies on the table description files
+specified in the ``redis.table-description-dir`` parameter.
 
 ``redis.default-schema``
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -129,6 +130,16 @@ References a folder within Trino deployment that holds one or more JSON
 files, which must end with ``.json`` and contain table description files.
 
 This property is optional; the default is ``etc/redis``.
+
+``redis.table-description-cache-ttl``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When adding a file end with ``.json`` to ``redis.table-description-dir`` folder,
+the redis connector dynamically loads the file after waiting for the time
+specified by this parameter, without modifying the ``redis.table-names`` parameter
+and restarting the trino service.
+
+This property is optional; the default is ``5m``.
 
 ``redis.hide-internal-columns``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
