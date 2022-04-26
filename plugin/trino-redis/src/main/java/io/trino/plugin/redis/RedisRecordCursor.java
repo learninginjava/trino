@@ -28,6 +28,7 @@ import redis.clients.jedis.exceptions.JedisDataException;
 import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.ScanResult;
 
+import javax.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -138,9 +139,7 @@ public class RedisRecordCursor
             }
             return nextMultipleRows();
         }
-        else {
-            return true;
-        }
+        return true;
     }
 
     private boolean endOfData()
@@ -156,84 +155,105 @@ public class RedisRecordCursor
         List<String> currentKeys = keys.size() > getKeySize ? keys.subList(0, getKeySize) : keys;
         fetchData(currentKeys);
 
-        for (int i = 0; i < currentKeys.size(); i++) {
-            String keyString = currentKeys.get(i);
-            byte[] keyData = keyString.getBytes(StandardCharsets.UTF_8);
-
-            byte[] stringValueData = EMPTY_BYTE_ARRAY;
-            Map<String, String> hashValueMap = new HashMap<>();
-            switch (split.getValueDataType()) {
-                case STRING:
-                    // If the value corresponding to the key does not exist, the valueString is null
-                    String valueString = stringValues.get(i);
-                    if (valueString != null) {
-                        stringValueData = valueString.getBytes(StandardCharsets.UTF_8);
-                        totalBytes += stringValueData.length;
-                    }
-                    else {
-                        log.warn("Redis data modified while query was running, string value at key %s may be deleted", keyString);
-                    }
-                    break;
-                case HASH:
-                    Object object = hashValues.get(i);
-                    if (object instanceof JedisDataException) {
-                        throw (JedisDataException) object;
-                    }
-                    hashValueMap = (Map<String, String>) object;
-                    break;
-                default:
-                    log.warn("Redis value of type %s is unsupported", split.getValueDataType());
-            }
-
-            totalValues++;
-
-            Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedKey = keyDecoder.decodeRow(keyData);
-            Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedValue = valueDecoder.decodeRow(
-                    stringValueData,
-                    hashValueMap);
-
-            Map<ColumnHandle, FieldValueProvider> currentRowValuesMap = new HashMap<>();
-
-            for (DecoderColumnHandle columnHandle : columnHandles) {
-                if (columnHandle.isInternal()) {
-                    RedisInternalFieldDescription fieldDescription = RedisInternalFieldDescription.forColumnName(columnHandle.getName());
-                    switch (fieldDescription) {
-                        case KEY_FIELD:
-                            currentRowValuesMap.put(columnHandle, bytesValueProvider(keyData));
-                            break;
-                        case VALUE_FIELD:
-                            currentRowValuesMap.put(columnHandle, bytesValueProvider(stringValueData));
-                            break;
-                        case KEY_LENGTH_FIELD:
-                            currentRowValuesMap.put(columnHandle, longValueProvider(keyData.length));
-                            break;
-                        case VALUE_LENGTH_FIELD:
-                            currentRowValuesMap.put(columnHandle, longValueProvider(stringValueData.length));
-                            break;
-                        case KEY_CORRUPT_FIELD:
-                            currentRowValuesMap.put(columnHandle, booleanValueProvider(decodedKey.isEmpty()));
-                            break;
-                        case VALUE_CORRUPT_FIELD:
-                            currentRowValuesMap.put(columnHandle, booleanValueProvider(decodedValue.isEmpty()));
-                            break;
-                        default:
-                            throw new IllegalArgumentException("unknown internal field " + fieldDescription);
-                    }
-                }
-            }
-
-            decodedKey.ifPresent(currentRowValuesMap::putAll);
-            decodedValue.ifPresent(currentRowValuesMap::putAll);
-
-            FieldValueProvider[] fieldValues = new FieldValueProvider[columnHandles.size()];
-            for (int j = 0; j < columnHandles.size(); j++) {
-                ColumnHandle columnHandle = columnHandles.get(j);
-                fieldValues[j] = currentRowValuesMap.get(columnHandle);
-            }
-            currentMultipleRows.offer(fieldValues);
+        switch (split.getValueDataType()) {
+            case STRING:
+                processStringValues(currentKeys);
+                break;
+            case HASH:
+                processHashValues(currentKeys);
+                break;
+            default:
+                log.warn("Redis value of type %s is unsupported", split.getValueDataType());
         }
         currentKeys.clear();
         return true;
+    }
+
+    private void processStringValues(List<String> currentKeys)
+    {
+        for (int i = 0; i < currentKeys.size(); i++) {
+            String keyString = currentKeys.get(i);
+            byte[] stringValueData = EMPTY_BYTE_ARRAY;
+
+            // If the value corresponding to the key does not exist, the valueString is null
+            String valueString = stringValues.get(i);
+            if (valueString != null) {
+                stringValueData = valueString.getBytes(StandardCharsets.UTF_8);
+                totalBytes += stringValueData.length;
+            }
+            else {
+                log.warn("Redis data modified while query was running, string value at key %s may be deleted", keyString);
+            }
+
+            totalValues++;
+            FieldValueProvider[] fieldValues = getNextRowValues(keyString, stringValueData, null);
+            currentMultipleRows.offer(fieldValues);
+        }
+    }
+
+    private void processHashValues(List<String> currentKeys)
+    {
+        for (int i = 0; i < currentKeys.size(); i++) {
+            String keyString = currentKeys.get(i);
+            Object object = hashValues.get(i);
+            if (object instanceof JedisDataException) {
+                throw (JedisDataException) object;
+            }
+            Map<String, String> hashValueMap = (Map<String, String>) object;
+
+            totalValues++;
+            FieldValueProvider[] fieldValues = getNextRowValues(keyString, EMPTY_BYTE_ARRAY, hashValueMap);
+            currentMultipleRows.offer(fieldValues);
+        }
+    }
+
+    private FieldValueProvider[] getNextRowValues(String keyString, byte[] stringValueData, @Nullable Map<String, String> hashValueMap)
+    {
+        byte[] keyData = keyString.getBytes(StandardCharsets.UTF_8);
+        Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedKey = keyDecoder.decodeRow(keyData);
+        Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedValue = valueDecoder.decodeRow(
+                stringValueData,
+                hashValueMap);
+
+        Map<ColumnHandle, FieldValueProvider> currentRowValuesMap = new HashMap<>();
+
+        for (DecoderColumnHandle columnHandle : columnHandles) {
+            if (columnHandle.isInternal()) {
+                RedisInternalFieldDescription fieldDescription = RedisInternalFieldDescription.forColumnName(columnHandle.getName());
+                switch (fieldDescription) {
+                    case KEY_FIELD:
+                        currentRowValuesMap.put(columnHandle, bytesValueProvider(keyData));
+                        break;
+                    case VALUE_FIELD:
+                        currentRowValuesMap.put(columnHandle, bytesValueProvider(stringValueData));
+                        break;
+                    case KEY_LENGTH_FIELD:
+                        currentRowValuesMap.put(columnHandle, longValueProvider(keyData.length));
+                        break;
+                    case VALUE_LENGTH_FIELD:
+                        currentRowValuesMap.put(columnHandle, longValueProvider(stringValueData.length));
+                        break;
+                    case KEY_CORRUPT_FIELD:
+                        currentRowValuesMap.put(columnHandle, booleanValueProvider(decodedKey.isEmpty()));
+                        break;
+                    case VALUE_CORRUPT_FIELD:
+                        currentRowValuesMap.put(columnHandle, booleanValueProvider(decodedValue.isEmpty()));
+                        break;
+                    default:
+                        throw new IllegalArgumentException("unknown internal field " + fieldDescription);
+                }
+            }
+        }
+
+        decodedKey.ifPresent(currentRowValuesMap::putAll);
+        decodedValue.ifPresent(currentRowValuesMap::putAll);
+
+        FieldValueProvider[] fieldValues = new FieldValueProvider[columnHandles.size()];
+        for (int j = 0; j < columnHandles.size(); j++) {
+            ColumnHandle columnHandle = columnHandles.get(j);
+            fieldValues[j] = currentRowValuesMap.get(columnHandle);
+        }
+        return fieldValues;
     }
 
     @Override
@@ -346,7 +366,7 @@ public class RedisRecordCursor
                     keys = jedis.zrange(split.getKeyName(), split.getStart(), split.getEnd());
                     break;
                 default:
-                    log.warn("Redis key of type %s is unsupported", split.getKeyDataFormat());
+                    log.debug("Redis key of type %s is unsupported", split.getKeyDataFormat());
             }
         }
     }
@@ -373,7 +393,7 @@ public class RedisRecordCursor
                     hashValues = pipeline.syncAndReturnAll();
                     break;
                 default:
-                    log.warn("Redis value of type %s is unsupported", split.getValueDataType());
+                    log.debug("Redis value of type %s is unsupported", split.getValueDataType());
             }
         }
     }

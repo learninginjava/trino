@@ -21,6 +21,7 @@ import io.airlift.units.Duration;
 import io.airlift.units.MinDuration;
 import io.trino.spi.HostAddress;
 
+import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 import javax.validation.constraints.Size;
 
@@ -159,6 +160,7 @@ public class RedisConnectorConfig
         return this;
     }
 
+    @Min(1)
     public int getRedisGetKeySize()
     {
         return redisGetKeySize;
