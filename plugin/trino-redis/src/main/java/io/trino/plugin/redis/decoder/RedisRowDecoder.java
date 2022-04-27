@@ -11,34 +11,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.trino.plugin.redis.decoder.zset;
+package io.trino.plugin.redis.decoder;
 
 import io.trino.decoder.DecoderColumnHandle;
 import io.trino.decoder.FieldValueProvider;
-import io.trino.plugin.redis.decoder.RedisRowDecoder;
+import io.trino.decoder.RowDecoder;
+
+import javax.annotation.Nullable;
 
 import java.util.Map;
 import java.util.Optional;
 
-import static java.util.Collections.emptyMap;
-
 /**
- * The row decoder for the 'zset' format. Zset's can contain redis keys for tables
+ * Implementations decode a row from map and add field value providers for all decodable columns.
  */
-public class ZsetRedisRowDecoder
-        implements RedisRowDecoder
+public interface RedisRowDecoder
+        extends RowDecoder
 {
-    public static final String NAME = "zset";
-
-    @Override
-    public Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodeRow(Map<String, String> dataMap)
-    {
-        return Optional.of(emptyMap());
-    }
-
-    @Override
-    public Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodeRow(byte[] data)
-    {
-        return Optional.of(emptyMap());
-    }
+    /**
+     * Decodes a given map into field values.
+     *
+     * @param dataMap The row data as fields map
+     * @return Returns mapping from column handle to decoded value. Unmapped columns will be reported as null. Optional.empty() signals decoding error.
+     */
+    Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodeRow(@Nullable Map<String, String> dataMap);
 }
