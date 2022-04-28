@@ -22,6 +22,7 @@ import io.airlift.units.Duration;
 import io.airlift.units.MinDuration;
 import io.trino.spi.HostAddress;
 
+import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 import javax.validation.constraints.Size;
 
@@ -38,6 +39,7 @@ public class RedisConnectorConfig
 
     private Set<HostAddress> nodes = ImmutableSet.of();
     private int redisScanCount = 100;
+    private int redisGetKeySize = 100;
     private int redisDataBaseIndex;
     private char redisKeyDelimiter = ':';
     private String redisPassword;
@@ -114,6 +116,20 @@ public class RedisConnectorConfig
     public RedisConnectorConfig setRedisScanCount(int redisScanCount)
     {
         this.redisScanCount = redisScanCount;
+        return this;
+    }
+
+    @Min(1)
+    public int getRedisGetKeySize()
+    {
+        return redisGetKeySize;
+    }
+
+    @Config("redis.get-key-size")
+    @ConfigDescription("Get values associated with the specified number of keys in the command such as MGET(key...)")
+    public RedisConnectorConfig setRedisGetKeySize(int redisGetKeySize)
+    {
+        this.redisGetKeySize = redisGetKeySize;
         return this;
     }
 
