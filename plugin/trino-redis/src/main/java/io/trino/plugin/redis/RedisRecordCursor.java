@@ -18,6 +18,7 @@ import io.airlift.slice.Slice;
 import io.trino.decoder.DecoderColumnHandle;
 import io.trino.decoder.FieldValueProvider;
 import io.trino.decoder.RowDecoder;
+import io.trino.plugin.redis.decoder.RedisRowDecoder;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.RecordCursor;
 import io.trino.spi.type.Type;
@@ -201,9 +202,9 @@ public class RedisRecordCursor
         byte[] keyData = keyString.getBytes(StandardCharsets.UTF_8);
         byte[] stringValueData = valueString.getBytes(StandardCharsets.UTF_8);
         Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedKey = keyDecoder.decodeRow(keyData);
-        Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedValue = valueDecoder.decodeRow(
-                stringValueData,
-                hashValueMap);
+        Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedValue = valueDecoder instanceof RedisRowDecoder
+                ? ((RedisRowDecoder) valueDecoder).decodeRow(hashValueMap)
+                : valueDecoder.decodeRow(stringValueData);
 
         totalBytes += stringValueData.length;
         totalValues++;
