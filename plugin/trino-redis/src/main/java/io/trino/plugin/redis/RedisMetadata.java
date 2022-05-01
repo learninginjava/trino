@@ -26,9 +26,12 @@ import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.ConnectorTableProperties;
+import io.trino.spi.connector.Constraint;
+import io.trino.spi.connector.ConstraintApplicationResult;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SchemaTablePrefix;
 import io.trino.spi.connector.TableNotFoundException;
+import io.trino.spi.predicate.TupleDomain;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -100,7 +103,8 @@ public class RedisMetadata
                 schemaTableName.getTableName(),
                 getDataFormat(table.getKey()),
                 getDataFormat(table.getValue()),
-                keyName);
+                keyName,
+                TupleDomain.all());
     }
 
     private static String getDataFormat(RedisTableFieldGroup fieldGroup)
@@ -173,6 +177,27 @@ public class RedisMetadata
         }
 
         return columnHandles.buildOrThrow();
+    }
+
+    @Override
+    public Optional<ConstraintApplicationResult<ConnectorTableHandle>> applyFilter(ConnectorSession session, ConnectorTableHandle table, Constraint constraint)
+    {
+        RedisTableHandle handle = (RedisTableHandle) table;
+        TupleDomain<ColumnHandle> oldDomain = handle.getConstraint();
+        TupleDomain<ColumnHandle> newDomain = oldDomain.intersect(constraint.getSummary());
+        if (oldDomain.equals(newDomain)) {
+            return Optional.empty();
+        }
+
+        handle = new RedisTableHandle(
+                handle.getSchemaName(),
+                handle.getTableName(),
+                handle.getKeyDataFormat(),
+                handle.getValueDataFormat(),
+                handle.getKeyName(),
+                newDomain);
+
+        return Optional.of(new ConstraintApplicationResult<>(handle, constraint.getSummary(), false));
     }
 
     @Override

@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.redis;
 
+import com.google.common.collect.Lists;
 import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.trino.decoder.DecoderColumnHandle;
@@ -20,6 +21,12 @@ import io.trino.decoder.FieldValueProvider;
 import io.trino.decoder.RowDecoder;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.RecordCursor;
+import io.trino.spi.predicate.Domain;
+import io.trino.spi.predicate.Range;
+import io.trino.spi.predicate.Ranges;
+import io.trino.spi.predicate.SortedRangeSet;
+import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.predicate.ValueSet;
 import io.trino.spi.type.Type;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
@@ -45,6 +52,7 @@ import static io.trino.decoder.FieldValueProviders.bytesValueProvider;
 import static io.trino.decoder.FieldValueProviders.longValueProvider;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toList;
 import static redis.clients.jedis.params.ScanParams.SCAN_POINTER_START;
 
 public class RedisRecordCursor
@@ -93,7 +101,9 @@ public class RedisRecordCursor
         this.maxKeysPerFetch = redisJedisManager.getRedisConnectorConfig().getRedisMaxKeysPerFetch();
         this.currentRowGroup = new LinkedList<>();
 
-        fetchKeys();
+        if (!isKeyPushdownEnabled()) {
+            fetchKeys();
+        }
     }
 
     @Override
@@ -115,6 +125,49 @@ public class RedisRecordCursor
         return columnHandles.get(field).getType();
     }
 
+    private boolean isKeyPushdownEnabled()
+    {
+        long userDefinedKeySize = columnHandles.stream().filter(c -> !c.isInternal() && c.isKeyDecoder()).count();
+        if (userDefinedKeySize > 1) {
+            return false;
+        }
+        TupleDomain<ColumnHandle> constraint = split.getConstraint();
+        if (constraint.isNone() || constraint.isAll()) {
+            return false;
+        }
+        Map<ColumnHandle, Domain> domains = constraint.getDomains().get();
+        for (RedisColumnHandle columnHandle : columnHandles) {
+            if (columnHandle.isKeyDecoder() && domains.containsKey(columnHandle)) {
+                return setPushdownKeys(domains, columnHandle);
+            }
+        }
+        return false;
+    }
+
+    private boolean setPushdownKeys(Map<ColumnHandle, Domain> domains, ColumnHandle columnHandle)
+    {
+        Domain domain = domains.get(columnHandle);
+        if (domain.isSingleValue()) {
+            String value = ((Slice) domain.getSingleValue()).toStringUtf8();
+            log.info("isSingleValue_value: %s", value);
+            keys = Lists.newArrayList(value);
+            return true;
+        }
+        else {
+            ValueSet valueSet = domain.getValues();
+            if (valueSet instanceof SortedRangeSet) {
+                Ranges ranges = ((SortedRangeSet) valueSet).getRanges();
+                List<Range> rangeList = ranges.getOrderedRanges();
+                if (rangeList.stream().allMatch(Range::isSingleValue)) {
+                    keys = rangeList.stream().map(range -> ((Slice) range.getSingleValue()).toStringUtf8()).collect(toList());
+                    log.info("SortedRangeSet_value: %s", keys);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public boolean hasUnscannedData()
     {
         if (redisCursor == null) {
@@ -133,6 +186,9 @@ public class RedisRecordCursor
         currentRowGroup.poll();
         if (currentRowGroup.isEmpty()) {
             while (keys.isEmpty()) {
+                if (isKeyPushdownEnabled()) {
+                    return false;
+                }
                 if (!hasUnscannedData()) {
                     return endOfData();
                 }
