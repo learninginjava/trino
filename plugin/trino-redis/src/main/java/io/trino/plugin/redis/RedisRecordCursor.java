@@ -193,8 +193,8 @@ public class RedisRecordCursor
             // If the value corresponding to the key does not exist, the valueString is null
             String valueString = stringValues.get(i);
             if (valueString == null) {
-                valueString = EMPTY_STRING;
                 log.warn("Redis data modified while query was running, string value at key %s may be deleted", keyString);
+                continue;
             }
             generateRowValues(keyString, valueString, null);
         }
@@ -208,15 +208,17 @@ public class RedisRecordCursor
             if (object instanceof JedisDataException) {
                 throw (JedisDataException) object;
             }
-            generateRowValues(keyString, EMPTY_STRING, (Map<String, String>) object);
+            Map<String, String> hashValueMap = (Map<String, String>) object;
+            if (hashValueMap.isEmpty()) {
+                log.warn("Redis data modified while query was running, hash value at key %s may be deleted", keyString);
+                continue;
+            }
+            generateRowValues(keyString, EMPTY_STRING, hashValueMap);
         }
     }
 
     private void generateRowValues(String keyString, String valueString, @Nullable Map<String, String> hashValueMap)
     {
-        if (valueString.isEmpty() && (hashValueMap == null || hashValueMap.isEmpty())) {
-            return;
-        }
         byte[] keyData = keyString.getBytes(StandardCharsets.UTF_8);
         byte[] stringValueData = valueString.getBytes(StandardCharsets.UTF_8);
         Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedKey = keyDecoder.decodeRow(keyData);
