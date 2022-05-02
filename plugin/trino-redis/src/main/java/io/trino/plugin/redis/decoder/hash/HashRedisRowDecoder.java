@@ -66,6 +66,6 @@ public class HashRedisRowDecoder
     @Override
     public Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodeRow(byte[] data)
     {
-        return Optional.of(emptyMap());
+        throw new UnsupportedOperationException();
     }
 }
