@@ -380,11 +380,10 @@ public class RedisRecordCursor
         String keyStringPrefix = redisJedisManager.getRedisConnectorConfig().isKeyPrefixSchemaTable()
                 ? scanParams.match().substring(0, scanParams.match().length() - 1)
                 : EMPTY_STRING;
-        log.info("keyStringPrefix_xxx: %s", keyStringPrefix);
         if (domain.isSingleValue()) {
             String value = ((Slice) domain.getSingleValue()).toStringUtf8();
-            log.info("isSingleValue_value: %s", value);
             keys = keyStringPrefix.isEmpty() || value.contains(keyStringPrefix) ? Lists.newArrayList(value) : emptyList();
+            log.debug("Set pushdown keys %s with single value", keys.toString());
             return true;
         }
         else {
@@ -397,7 +396,7 @@ public class RedisRecordCursor
                             .map(range -> ((Slice) range.getSingleValue()).toStringUtf8())
                             .filter(str -> keyStringPrefix.isEmpty() || str.contains(keyStringPrefix))
                             .collect(toList());
-                    log.info("SortedRangeSet_value: %s", keys);
+                    log.debug("Set pushdown keys %s with sorted range values", keys.toString());
                     return true;
                 }
             }
