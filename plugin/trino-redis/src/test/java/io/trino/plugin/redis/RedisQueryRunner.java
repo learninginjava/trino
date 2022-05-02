@@ -71,7 +71,7 @@ public final class RedisQueryRunner
 
             Map<SchemaTableName, RedisTableDescription> tableDescriptions = createTpchTableDescriptions(queryRunner.getCoordinator().getTypeManager(), tables, dataFormat);
 
-            installRedisPlugin(redisServer, queryRunner, tableDescriptions);
+            installRedisPlugin(redisServer, queryRunner, tableDescriptions, "redis", "true");
 
             TestingTrinoClient trinoClient = queryRunner.getClient();
 

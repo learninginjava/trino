@@ -51,6 +51,7 @@ import static io.trino.decoder.FieldValueProviders.booleanValueProvider;
 import static io.trino.decoder.FieldValueProviders.bytesValueProvider;
 import static io.trino.decoder.FieldValueProviders.longValueProvider;
 import static java.lang.String.format;
+import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 import static redis.clients.jedis.params.ScanParams.SCAN_POINTER_START;
@@ -70,6 +71,7 @@ public class RedisRecordCursor
     private final JedisPool jedisPool;
     private final ScanParams scanParams;
     private final int maxKeysPerFetch;
+    private final boolean keyPushdownEnabled;
 
     private ScanResult<String> redisCursor;
     private List<String> keys;
@@ -100,8 +102,9 @@ public class RedisRecordCursor
         this.scanParams = setScanParams();
         this.maxKeysPerFetch = redisJedisManager.getRedisConnectorConfig().getRedisMaxKeysPerFetch();
         this.currentRowGroup = new LinkedList<>();
+        this.keyPushdownEnabled = isKeyPushdownEnabled();
 
-        if (!isKeyPushdownEnabled()) {
+        if (!keyPushdownEnabled) {
             fetchKeys();
         }
     }
@@ -125,49 +128,6 @@ public class RedisRecordCursor
         return columnHandles.get(field).getType();
     }
 
-    private boolean isKeyPushdownEnabled()
-    {
-        long userDefinedKeySize = columnHandles.stream().filter(c -> !c.isInternal() && c.isKeyDecoder()).count();
-        if (userDefinedKeySize > 1) {
-            return false;
-        }
-        TupleDomain<ColumnHandle> constraint = split.getConstraint();
-        if (constraint.isNone() || constraint.isAll()) {
-            return false;
-        }
-        Map<ColumnHandle, Domain> domains = constraint.getDomains().get();
-        for (RedisColumnHandle columnHandle : columnHandles) {
-            if (columnHandle.isKeyDecoder() && domains.containsKey(columnHandle)) {
-                return setPushdownKeys(domains, columnHandle);
-            }
-        }
-        return false;
-    }
-
-    private boolean setPushdownKeys(Map<ColumnHandle, Domain> domains, ColumnHandle columnHandle)
-    {
-        Domain domain = domains.get(columnHandle);
-        if (domain.isSingleValue()) {
-            String value = ((Slice) domain.getSingleValue()).toStringUtf8();
-            log.info("isSingleValue_value: %s", value);
-            keys = Lists.newArrayList(value);
-            return true;
-        }
-        else {
-            ValueSet valueSet = domain.getValues();
-            if (valueSet instanceof SortedRangeSet) {
-                Ranges ranges = ((SortedRangeSet) valueSet).getRanges();
-                List<Range> rangeList = ranges.getOrderedRanges();
-                if (rangeList.stream().allMatch(Range::isSingleValue)) {
-                    keys = rangeList.stream().map(range -> ((Slice) range.getSingleValue()).toStringUtf8()).collect(toList());
-                    log.info("SortedRangeSet_value: %s", keys);
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
     public boolean hasUnscannedData()
     {
         if (redisCursor == null) {
@@ -186,7 +146,7 @@ public class RedisRecordCursor
         currentRowGroup.poll();
         if (currentRowGroup.isEmpty()) {
             while (keys.isEmpty()) {
-                if (isKeyPushdownEnabled()) {
+                if (keyPushdownEnabled) {
                     return false;
                 }
                 if (!hasUnscannedData()) {
@@ -390,6 +350,59 @@ public class RedisRecordCursor
         }
 
         return null;
+    }
+
+    private boolean isKeyPushdownEnabled()
+    {
+        if (split.getKeyDataType() != RedisDataType.STRING) {
+            return false;
+        }
+        long userDefinedKeySize = columnHandles.stream().filter(c -> !c.isInternal() && c.isKeyDecoder()).count();
+        if (userDefinedKeySize > 1) {
+            return false;
+        }
+        TupleDomain<ColumnHandle> constraint = split.getConstraint();
+        if (constraint.isNone() || constraint.isAll()) {
+            return false;
+        }
+        Map<ColumnHandle, Domain> domains = constraint.getDomains().get();
+        for (RedisColumnHandle columnHandle : columnHandles) {
+            if (columnHandle.isKeyDecoder() && domains.containsKey(columnHandle)) {
+                return setPushdownKeys(domains, columnHandle);
+            }
+        }
+        return false;
+    }
+
+    private boolean setPushdownKeys(Map<ColumnHandle, Domain> domains, ColumnHandle columnHandle)
+    {
+        Domain domain = domains.get(columnHandle);
+        String keyStringPrefix = redisJedisManager.getRedisConnectorConfig().isKeyPrefixSchemaTable()
+                ? scanParams.match().substring(0, scanParams.match().length() - 1)
+                : EMPTY_STRING;
+        log.info("keyStringPrefix_xxx: %s", keyStringPrefix);
+        if (domain.isSingleValue()) {
+            String value = ((Slice) domain.getSingleValue()).toStringUtf8();
+            log.info("isSingleValue_value: %s", value);
+            keys = keyStringPrefix.isEmpty() || value.contains(keyStringPrefix) ? Lists.newArrayList(value) : emptyList();
+            return true;
+        }
+        else {
+            ValueSet valueSet = domain.getValues();
+            if (valueSet instanceof SortedRangeSet) {
+                Ranges ranges = ((SortedRangeSet) valueSet).getRanges();
+                List<Range> rangeList = ranges.getOrderedRanges();
+                if (rangeList.stream().allMatch(Range::isSingleValue)) {
+                    keys = rangeList.stream()
+                            .map(range -> ((Slice) range.getSingleValue()).toStringUtf8())
+                            .filter(str -> keyStringPrefix.isEmpty() || str.contains(keyStringPrefix))
+                            .collect(toList());
+                    log.info("SortedRangeSet_value: %s", keys);
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // Redis keys can be contained in the user-provided ZSET

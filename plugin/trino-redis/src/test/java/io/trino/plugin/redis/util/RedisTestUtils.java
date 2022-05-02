@@ -19,6 +19,7 @@ import com.google.common.io.ByteStreams;
 import io.airlift.json.JsonCodec;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.plugin.redis.RedisTableDescription;
+import io.trino.plugin.redis.RedisTableFieldGroup;
 import io.trino.plugin.redis.TestingRedisPlugin;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.testing.QueryRunner;
@@ -35,7 +36,12 @@ public final class RedisTestUtils
 {
     private RedisTestUtils() {}
 
-    public static void installRedisPlugin(RedisServer redisServer, QueryRunner queryRunner, Map<SchemaTableName, RedisTableDescription> tableDescriptions)
+    public static void installRedisPlugin(
+            RedisServer redisServer,
+            QueryRunner queryRunner,
+            Map<SchemaTableName, RedisTableDescription> tableDescriptions,
+            String catalogName,
+            String keyPrefixSchemaTable)
     {
         queryRunner.installPlugin(new TestingRedisPlugin(tableDescriptions));
 
@@ -44,8 +50,8 @@ public final class RedisTestUtils
                 "redis.table-names", Joiner.on(",").join(tableDescriptions.keySet()),
                 "redis.default-schema", "default",
                 "redis.hide-internal-columns", "true",
-                "redis.key-prefix-schema-table", "true");
-        queryRunner.createCatalog("redis", "redis", redisConfig);
+                "redis.key-prefix-schema-table", keyPrefixSchemaTable);
+        queryRunner.createCatalog(catalogName, "redis", redisConfig);
     }
 
     public static void loadTpchTable(RedisServer redisServer, TestingTrinoClient trinoClient, String tableName, QualifiedObjectName tpchTableName, String dataFormat)
@@ -74,13 +80,16 @@ public final class RedisTestUtils
         return new AbstractMap.SimpleImmutableEntry<>(schemaTableName, tableDescription);
     }
 
-    public static Map.Entry<SchemaTableName, RedisTableDescription> createEmptyTableDescription(SchemaTableName schemaTableName)
+    public static Map.Entry<SchemaTableName, RedisTableDescription> createTableDescription(
+            SchemaTableName schemaTableName,
+            RedisTableFieldGroup key,
+            RedisTableFieldGroup value)
     {
         RedisTableDescription tableDescription = new RedisTableDescription(
                 schemaTableName.getTableName(),
                 schemaTableName.getSchemaName(),
-                null,
-                null);
+                key,
+                value);
 
         return new AbstractMap.SimpleImmutableEntry<>(schemaTableName, tableDescription);
     }

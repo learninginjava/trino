@@ -17,13 +17,9 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.io.ByteStreams;
 import io.airlift.json.JsonCodec;
 import io.trino.Session;
-import io.trino.metadata.QualifiedObjectName;
-import io.trino.metadata.TableHandle;
 import io.trino.plugin.redis.util.CodecSupplier;
-import io.trino.plugin.redis.util.JsonEncoder;
 import io.trino.plugin.redis.util.RedisServer;
 import io.trino.plugin.redis.util.RedisTestUtils;
-import io.trino.security.AllowAllAccessControl;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.type.BigintType;
 import io.trino.testing.MaterializedResult;
@@ -33,25 +29,21 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
-import redis.clients.jedis.Jedis;
 
 import java.io.InputStream;
-import java.util.Optional;
 import java.util.UUID;
 
 import static io.trino.plugin.redis.util.RedisTestUtils.createTableDescription;
 import static io.trino.plugin.redis.util.RedisTestUtils.installRedisPlugin;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static io.trino.testing.assertions.Assert.assertEquals;
-import static io.trino.transaction.TransactionBuilder.transaction;
 import static java.lang.String.format;
-import static org.testng.Assert.assertTrue;
 
 @Test(singleThreaded = true)
-public class TestMinimalFunctionality
+public class TestMinimalFunctionalityWithoutKeyPrefix
 {
     private static final Session SESSION = testSessionBuilder()
-            .setCatalog("redis")
+            .setCatalog("redis_without_key_prefix")
             .setSchema("default")
             .build();
 
@@ -93,7 +85,7 @@ public class TestMinimalFunctionality
                         .put(createTableDescription(new SchemaTableName("default", tableName), null, null))
                         .put(createTableDescription(new SchemaTableName(description.getSchemaName(), description.getTableName()), description.getKey(), description.getValue()))
                         .buildOrThrow(),
-                "redis", "true");
+                "redis_without_key_prefix", "false");
     }
 
     @AfterMethod(alwaysRun = true)
@@ -103,88 +95,21 @@ public class TestMinimalFunctionality
         queryRunner = null;
     }
 
-    private void populateData(int count)
-    {
-        JsonEncoder jsonEncoder = new JsonEncoder();
-        for (long i = 0; i < count; i++) {
-            Object value = ImmutableMap.of("id", Long.toString(i), "value", UUID.randomUUID().toString());
-            try (Jedis jedis = redisServer.getJedisPool().getResource()) {
-                jedis.set(tableName + ":" + i, jsonEncoder.toString(value));
-                jedis.set(minimalTableName + ":" + i, jsonEncoder.toString(value));
-            }
-        }
-    }
-
-    @Test
-    public void testTableExists()
-    {
-        QualifiedObjectName name = new QualifiedObjectName("redis", "default", tableName);
-        transaction(queryRunner.getTransactionManager(), new AllowAllAccessControl())
-                .singleStatement()
-                .execute(SESSION, session -> {
-                    Optional<TableHandle> handle = queryRunner.getServer().getMetadata().getTableHandle(session, name);
-                    assertTrue(handle.isPresent());
-                });
-    }
-
-    @Test
-    public void testTableHasData()
-    {
-        MaterializedResult result = queryRunner.execute("SELECT count(1) from " + tableName);
-
-        MaterializedResult expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
-                .row(0L)
-                .build();
-
-        assertEquals(result, expected);
-
-        int count = 1000;
-        populateData(count);
-
-        result = queryRunner.execute("SELECT count(1) from " + tableName);
-
-        expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
-                .row((long) count)
-                .build();
-
-        assertEquals(result, expected);
-    }
-
     @Test
     public void testWhereClauseHasData()
     {
-        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", minimalTableName, minimalTableName));
+        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", minimalTableName, minimalTableName, tableName));
 
         MaterializedResult expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
-                .row(1L)
-                .build();
-
-        assertEquals(result, expected);
-
-        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", minimalTableName, minimalTableName, minimalTableName));
-
-        expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row(2L)
                 .build();
 
         assertEquals(result, expected);
 
-        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", minimalTableName, minimalTableName, tableName));
+        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", minimalTableName, tableName));
 
         expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row(1L)
-                .build();
-
-        assertEquals(result, expected);
-    }
-
-    @Test
-    public void testWhereClauseHasNoData()
-    {
-        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", minimalTableName, tableName));
-
-        MaterializedResult expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
-                .row(0L)
                 .build();
 
         assertEquals(result, expected);
@@ -192,7 +117,7 @@ public class TestMinimalFunctionality
         result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", minimalTableName, tableName, tableName));
 
         expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
-                .row(0L)
+                .row(2L)
                 .build();
 
         assertEquals(result, expected);
