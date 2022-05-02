@@ -14,33 +14,28 @@
 package io.trino.plugin.redis;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.io.ByteStreams;
-import io.airlift.json.JsonCodec;
 import io.trino.Session;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.metadata.TableHandle;
-import io.trino.plugin.redis.util.CodecSupplier;
 import io.trino.plugin.redis.util.JsonEncoder;
 import io.trino.plugin.redis.util.RedisServer;
-import io.trino.plugin.redis.util.RedisTestUtils;
 import io.trino.security.AllowAllAccessControl;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.type.BigintType;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.StandaloneQueryRunner;
 import org.testng.annotations.AfterClass;
-import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeClass;
-import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 import redis.clients.jedis.Jedis;
 
-import java.io.InputStream;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import static io.trino.plugin.redis.util.RedisTestUtils.createTableDescription;
+import static io.trino.plugin.redis.util.RedisTestUtils.createTableDefinitions;
 import static io.trino.plugin.redis.util.RedisTestUtils.installRedisPlugin;
+import static io.trino.plugin.redis.util.RedisTestUtils.loadSimpleTableDescription;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static io.trino.testing.assertions.Assert.assertEquals;
 import static io.trino.transaction.TransactionBuilder.transaction;
@@ -57,50 +52,45 @@ public class TestMinimalFunctionality
 
     private RedisServer redisServer;
     private String tableName;
-    private String minimalTableName;
+    private String stringValueTableName;
+    private String hashValueTableName;
     private StandaloneQueryRunner queryRunner;
 
     @BeforeClass
     public void startRedis()
+            throws Exception
     {
         redisServer = new RedisServer();
+        tableName = "test_" + UUID.randomUUID().toString().replaceAll("-", "_");
+
+        queryRunner = new StandaloneQueryRunner(SESSION);
+
+        RedisTableDescription stringValueTableDesc = loadSimpleTableDescription(queryRunner, "string");
+        RedisTableDescription hashValueTableDesc = loadSimpleTableDescription(queryRunner, "hash");
+        stringValueTableName = stringValueTableDesc.getTableName();
+        hashValueTableName = hashValueTableDesc.getTableName();
+
+        installRedisPlugin(redisServer, queryRunner,
+                ImmutableMap.<SchemaTableName, RedisTableDescription>builder()
+                        .put(createTableDefinitions(new SchemaTableName("default", tableName), null, null))
+                        .put(createTableDefinitions(new SchemaTableName("default", stringValueTableName), stringValueTableDesc.getKey(), stringValueTableDesc.getValue()))
+                        .put(createTableDefinitions(new SchemaTableName("default", hashValueTableName), hashValueTableDesc.getKey(), hashValueTableDesc.getValue()))
+                        .buildOrThrow(),
+                "redis", "true");
+
+        populateData(1000);
     }
 
     @AfterClass(alwaysRun = true)
     public void stopRedis()
     {
-        redisServer.close();
-        redisServer = null;
-    }
+        clearData();
 
-    @BeforeMethod
-    public void spinUp()
-            throws Exception
-    {
-        this.tableName = "test_" + UUID.randomUUID().toString().replaceAll("-", "_");
-
-        this.queryRunner = new StandaloneQueryRunner(SESSION);
-
-        RedisTableDescription description;
-        JsonCodec<RedisTableDescription> tableDescriptionJsonCodec = new CodecSupplier<>(RedisTableDescription.class, this.queryRunner.getTypeManager()).get();
-        try (InputStream data = RedisTestUtils.class.getResourceAsStream("/read_test/minimal_table_desc.json")) {
-            description = tableDescriptionJsonCodec.fromJson(ByteStreams.toByteArray(data));
-        }
-        this.minimalTableName = description.getTableName();
-
-        installRedisPlugin(redisServer, queryRunner,
-                ImmutableMap.<SchemaTableName, RedisTableDescription>builder()
-                        .put(createTableDescription(new SchemaTableName("default", tableName), null, null))
-                        .put(createTableDescription(new SchemaTableName(description.getSchemaName(), description.getTableName()), description.getKey(), description.getValue()))
-                        .buildOrThrow(),
-                "redis", "true");
-    }
-
-    @AfterMethod(alwaysRun = true)
-    public void tearDown()
-    {
         queryRunner.close();
         queryRunner = null;
+
+        redisServer.close();
+        redisServer = null;
     }
 
     private void populateData(int count)
@@ -110,8 +100,16 @@ public class TestMinimalFunctionality
             Object value = ImmutableMap.of("id", Long.toString(i), "value", UUID.randomUUID().toString());
             try (Jedis jedis = redisServer.getJedisPool().getResource()) {
                 jedis.set(tableName + ":" + i, jsonEncoder.toString(value));
-                jedis.set(minimalTableName + ":" + i, jsonEncoder.toString(value));
+                jedis.set(stringValueTableName + ":" + i, jsonEncoder.toString(value));
+                jedis.hmset(hashValueTableName + ":" + i, (Map<String, String>) value);
             }
+        }
+    }
+
+    private void clearData()
+    {
+        try (Jedis jedis = redisServer.getJedisPool().getResource()) {
+            jedis.flushAll();
         }
     }
 
@@ -130,71 +128,97 @@ public class TestMinimalFunctionality
     @Test
     public void testTableHasData()
     {
-        MaterializedResult result = queryRunner.execute("SELECT count(1) from " + tableName);
+        clearData();
 
+        MaterializedResult result = queryRunner.execute("SELECT count(1) from " + tableName);
         MaterializedResult expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row(0L)
                 .build();
-
         assertEquals(result, expected);
 
         int count = 1000;
         populateData(count);
 
         result = queryRunner.execute("SELECT count(1) from " + tableName);
-
         expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row((long) count)
                 .build();
-
         assertEquals(result, expected);
     }
 
     @Test
-    public void testWhereClauseHasData()
+    public void testStringValueWhereClauseHasData()
     {
-        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", minimalTableName, minimalTableName));
-
+        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", stringValueTableName, stringValueTableName));
         MaterializedResult expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row(1L)
                 .build();
-
         assertEquals(result, expected);
 
-        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", minimalTableName, minimalTableName, minimalTableName));
-
+        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", stringValueTableName, stringValueTableName, stringValueTableName));
         expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row(2L)
                 .build();
-
         assertEquals(result, expected);
 
-        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", minimalTableName, minimalTableName, tableName));
-
+        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", stringValueTableName, stringValueTableName, tableName));
         expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row(1L)
                 .build();
-
         assertEquals(result, expected);
     }
 
     @Test
-    public void testWhereClauseHasNoData()
+    public void testHashValueWhereClauseHasData()
     {
-        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", minimalTableName, tableName));
+        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", hashValueTableName, hashValueTableName));
+        MaterializedResult expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
+                .row(1L)
+                .build();
+        assertEquals(result, expected);
 
+        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", hashValueTableName, hashValueTableName, hashValueTableName));
+        expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
+                .row(2L)
+                .build();
+        assertEquals(result, expected);
+
+        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", hashValueTableName, hashValueTableName, tableName));
+        expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
+                .row(1L)
+                .build();
+        assertEquals(result, expected);
+    }
+
+    @Test
+    public void testStringValueWhereClauseHasNoData()
+    {
+        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", stringValueTableName, tableName));
         MaterializedResult expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row(0L)
                 .build();
-
         assertEquals(result, expected);
 
-        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", minimalTableName, tableName, tableName));
-
+        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", stringValueTableName, tableName, tableName));
         expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
                 .row(0L)
                 .build();
+        assertEquals(result, expected);
+    }
 
+    @Test
+    public void testHashValueWhereClauseHasNoData()
+    {
+        MaterializedResult result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key = '%s:999'", hashValueTableName, tableName));
+        MaterializedResult expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
+                .row(0L)
+                .build();
+        assertEquals(result, expected);
+
+        result = queryRunner.execute(format("SELECT count(1) from %s WHERE redis_key in ('%s:0', '%s:999')", hashValueTableName, tableName, tableName));
+        expected = MaterializedResult.resultBuilder(SESSION, BigintType.BIGINT)
+                .row(0L)
+                .build();
         assertEquals(result, expected);
     }
 }

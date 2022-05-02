@@ -214,6 +214,9 @@ public class RedisRecordCursor
 
     private void generateRowValues(String keyString, String valueString, @Nullable Map<String, String> hashValueMap)
     {
+        if (valueString.isEmpty() && (hashValueMap == null || hashValueMap.isEmpty())) {
+            return;
+        }
         byte[] keyData = keyString.getBytes(StandardCharsets.UTF_8);
         byte[] stringValueData = valueString.getBytes(StandardCharsets.UTF_8);
         Optional<Map<DecoderColumnHandle, FieldValueProvider>> decodedKey = keyDecoder.decodeRow(keyData);

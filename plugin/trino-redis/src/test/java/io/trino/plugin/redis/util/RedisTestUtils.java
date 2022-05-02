@@ -80,7 +80,7 @@ public final class RedisTestUtils
         return new AbstractMap.SimpleImmutableEntry<>(schemaTableName, tableDescription);
     }
 
-    public static Map.Entry<SchemaTableName, RedisTableDescription> createTableDescription(
+    public static Map.Entry<SchemaTableName, RedisTableDescription> createTableDefinitions(
             SchemaTableName schemaTableName,
             RedisTableFieldGroup key,
             RedisTableFieldGroup value)
@@ -92,5 +92,14 @@ public final class RedisTestUtils
                 value);
 
         return new AbstractMap.SimpleImmutableEntry<>(schemaTableName, tableDescription);
+    }
+
+    public static RedisTableDescription loadSimpleTableDescription(QueryRunner queryRunner, String valueDataFormat)
+            throws Exception
+    {
+        JsonCodec<RedisTableDescription> tableDescriptionJsonCodec = new CodecSupplier<>(RedisTableDescription.class, queryRunner.getTypeManager()).get();
+        try (InputStream data = RedisTestUtils.class.getResourceAsStream(format("/simple/%s_value_table.json", valueDataFormat))) {
+            return tableDescriptionJsonCodec.fromJson(ByteStreams.toByteArray(data));
+        }
     }
 }

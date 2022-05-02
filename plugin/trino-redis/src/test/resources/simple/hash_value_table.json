@@ -1,5 +1,5 @@
 {
-    "tableName": "minimal",
+    "tableName": "hash_value_table",
     "schemaName": "default",
     "key": {
         "dataFormat": "raw",
@@ -12,7 +12,7 @@
         ]
     },
     "value": {
-        "dataFormat": "json",
+        "dataFormat": "hash",
         "fields": [
             {
                 "name": "id",
