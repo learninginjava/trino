@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.redis;
 
+import com.google.common.collect.Lists;
 import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.trino.decoder.DecoderColumnHandle;
@@ -21,6 +22,12 @@ import io.trino.decoder.RowDecoder;
 import io.trino.plugin.redis.decoder.RedisRowDecoder;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.RecordCursor;
+import io.trino.spi.predicate.Domain;
+import io.trino.spi.predicate.Range;
+import io.trino.spi.predicate.Ranges;
+import io.trino.spi.predicate.SortedRangeSet;
+import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.predicate.ValueSet;
 import io.trino.spi.type.Type;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
@@ -45,7 +52,9 @@ import static io.trino.decoder.FieldValueProviders.booleanValueProvider;
 import static io.trino.decoder.FieldValueProviders.bytesValueProvider;
 import static io.trino.decoder.FieldValueProviders.longValueProvider;
 import static java.lang.String.format;
+import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toList;
 import static redis.clients.jedis.params.ScanParams.SCAN_POINTER_START;
 
 public class RedisRecordCursor
@@ -63,6 +72,7 @@ public class RedisRecordCursor
     private final JedisPool jedisPool;
     private final ScanParams scanParams;
     private final int maxKeysPerFetch;
+    private final boolean keyPushdownEnabled;
 
     private ScanResult<String> redisCursor;
     private List<String> keys;
@@ -93,8 +103,11 @@ public class RedisRecordCursor
         this.scanParams = setScanParams();
         this.maxKeysPerFetch = redisJedisManager.getRedisConnectorConfig().getRedisMaxKeysPerFetch();
         this.currentRowGroup = new LinkedList<>();
+        this.keyPushdownEnabled = isKeyPushdownEnabled();
 
-        fetchKeys();
+        if (!keyPushdownEnabled) {
+            fetchKeys();
+        }
     }
 
     @Override
@@ -134,6 +147,9 @@ public class RedisRecordCursor
         currentRowGroup.poll();
         if (currentRowGroup.isEmpty()) {
             while (keys.isEmpty()) {
+                if (keyPushdownEnabled) {
+                    return false;
+                }
                 if (!hasUnscannedData()) {
                     return endOfData();
                 }
@@ -178,8 +194,8 @@ public class RedisRecordCursor
             // If the value corresponding to the key does not exist, the valueString is null
             String valueString = stringValues.get(i);
             if (valueString == null) {
-                valueString = EMPTY_STRING;
-                log.warn("Redis data modified while query was running, string value at key %s may be deleted", keyString);
+                log.warn("The string value at key %s does not exist", keyString);
+                continue;
             }
             generateRowValues(keyString, valueString, null);
         }
@@ -193,7 +209,12 @@ public class RedisRecordCursor
             if (object instanceof JedisDataException) {
                 throw (JedisDataException) object;
             }
-            generateRowValues(keyString, EMPTY_STRING, (Map<String, String>) object);
+            Map<String, String> hashValueMap = (Map<String, String>) object;
+            if (hashValueMap.isEmpty()) {
+                log.warn("The hash value at key %s does not exist", keyString);
+                continue;
+            }
+            generateRowValues(keyString, EMPTY_STRING, hashValueMap);
         }
     }
 
@@ -338,6 +359,58 @@ public class RedisRecordCursor
         }
 
         return null;
+    }
+
+    private boolean isKeyPushdownEnabled()
+    {
+        if (split.getKeyDataType() != RedisDataType.STRING) {
+            return false;
+        }
+        long userDefinedKeySize = columnHandles.stream().filter(c -> !c.isInternal() && c.isKeyDecoder()).count();
+        if (userDefinedKeySize > 1) {
+            return false;
+        }
+        TupleDomain<ColumnHandle> constraint = split.getConstraint();
+        if (constraint.isNone() || constraint.isAll()) {
+            return false;
+        }
+        Map<ColumnHandle, Domain> domains = constraint.getDomains().get();
+        for (RedisColumnHandle columnHandle : columnHandles) {
+            if (columnHandle.isKeyDecoder() && domains.containsKey(columnHandle)) {
+                return setPushdownKeys(domains, columnHandle);
+            }
+        }
+        return false;
+    }
+
+    private boolean setPushdownKeys(Map<ColumnHandle, Domain> domains, ColumnHandle columnHandle)
+    {
+        Domain domain = domains.get(columnHandle);
+        String keyStringPrefix = redisJedisManager.getRedisConnectorConfig().isKeyPrefixSchemaTable()
+                ? scanParams.match().substring(0, scanParams.match().length() - 1)
+                : EMPTY_STRING;
+        if (domain.isSingleValue()) {
+            String value = ((Slice) domain.getSingleValue()).toStringUtf8();
+            keys = keyStringPrefix.isEmpty() || value.contains(keyStringPrefix) ? Lists.newArrayList(value) : emptyList();
+            log.debug("Set pushdown keys %s with single value", keys.toString());
+            return true;
+        }
+        else {
+            ValueSet valueSet = domain.getValues();
+            if (valueSet instanceof SortedRangeSet) {
+                Ranges ranges = ((SortedRangeSet) valueSet).getRanges();
+                List<Range> rangeList = ranges.getOrderedRanges();
+                if (rangeList.stream().allMatch(Range::isSingleValue)) {
+                    keys = rangeList.stream()
+                            .map(range -> ((Slice) range.getSingleValue()).toStringUtf8())
+                            .filter(str -> keyStringPrefix.isEmpty() || str.contains(keyStringPrefix))
+                            .collect(toList());
+                    log.debug("Set pushdown keys %s with sorted range values", keys.toString());
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // Redis keys can be contained in the user-provided ZSET
