@@ -82,6 +82,7 @@ import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.transform;
 import static io.trino.plugin.cassandra.CassandraErrorCode.CASSANDRA_VERSION_ERROR;
 import static io.trino.plugin.cassandra.CassandraMetadata.PRESTO_COMMENT_METADATA;
+import static io.trino.plugin.cassandra.CassandraMetadata.TRINO_COMMENT_METADATA;
 import static io.trino.plugin.cassandra.CassandraType.isFullySupported;
 import static io.trino.plugin.cassandra.CassandraType.toCassandraType;
 import static io.trino.plugin.cassandra.util.CassandraCqlUtils.selectDistinctFrom;
@@ -212,8 +213,10 @@ public class CassandraSession
         // check if there is a comment to establish column ordering
         Object comment = tableMeta.getOptions().get(CqlIdentifier.fromInternal("comment"));
         Set<String> hiddenColumns = ImmutableSet.of();
-        if (comment instanceof String && ((String) comment).startsWith(PRESTO_COMMENT_METADATA)) {
-            String columnOrderingString = ((String) comment).substring(PRESTO_COMMENT_METADATA.length());
+        if (comment instanceof String && (((String) comment).startsWith(TRINO_COMMENT_METADATA) || ((String) comment).startsWith(PRESTO_COMMENT_METADATA))) {
+            String columnOrderingString = ((String) comment).startsWith(TRINO_COMMENT_METADATA)
+                    ? ((String) comment).substring(TRINO_COMMENT_METADATA.length())
+                    : ((String) comment).substring(PRESTO_COMMENT_METADATA.length());
 
             // column ordering
             List<ExtraColumnMetadata> extras = extraColumnMetadataCodec.fromJson(columnOrderingString);

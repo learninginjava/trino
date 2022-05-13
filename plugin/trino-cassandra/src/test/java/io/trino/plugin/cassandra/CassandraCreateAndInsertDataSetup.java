@@ -26,7 +26,7 @@ import java.util.stream.IntStream;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static io.airlift.testing.Closeables.closeAllSuppress;
-import static io.trino.plugin.cassandra.CassandraMetadata.PRESTO_COMMENT_METADATA;
+import static io.trino.plugin.cassandra.CassandraMetadata.TRINO_COMMENT_METADATA;
 import static io.trino.plugin.cassandra.util.CassandraCqlUtils.ID_COLUMN_NAME;
 import static io.trino.plugin.cassandra.util.CassandraCqlUtils.quoteStringLiteral;
 import static java.lang.String.format;
@@ -115,6 +115,6 @@ public class CassandraCreateAndInsertDataSetup
 
         return IntStream.range(0, inputs.size())
                 .mapToObj(column -> format("col_%d %s", column, inputs.get(column).getDeclaredType().orElseThrow()))
-                .collect(joining(",", "(" + ID_COLUMN_NAME + " uuid PRIMARY KEY,", ") WITH comment=" + quoteStringLiteral(PRESTO_COMMENT_METADATA + " " + columnMetadata)));
+                .collect(joining(",", "(" + ID_COLUMN_NAME + " uuid PRIMARY KEY,", ") WITH comment=" + quoteStringLiteral(TRINO_COMMENT_METADATA + " " + columnMetadata)));
     }
 }

@@ -72,6 +72,7 @@ public class CassandraMetadata
         implements ConnectorMetadata
 {
     public static final String PRESTO_COMMENT_METADATA = "Presto Metadata:";
+    public static final String TRINO_COMMENT_METADATA = "Trino Metadata:";
 
     private final CassandraSession cassandraSession;
     private final CassandraPartitionManager partitionManager;
@@ -310,7 +311,7 @@ public class CassandraMetadata
 
         // encode column ordering in the cassandra table comment field since there is no better place to store this
         String columnMetadata = extraColumnMetadataCodec.toJson(columnExtra.build());
-        queryBuilder.append("WITH comment=").append(quoteStringLiteral(PRESTO_COMMENT_METADATA + " " + columnMetadata));
+        queryBuilder.append("WITH comment=").append(quoteStringLiteral(TRINO_COMMENT_METADATA + " " + columnMetadata));
 
         // We need to create the Cassandra table before commit because the record needs to be written to the table.
         cassandraSession.execute(queryBuilder.toString());
