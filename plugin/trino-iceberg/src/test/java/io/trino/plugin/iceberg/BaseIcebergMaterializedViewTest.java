@@ -28,6 +28,7 @@ import org.assertj.core.api.Condition;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import java.io.File;
 import java.util.Optional;
 import java.util.Set;
 
@@ -150,8 +151,12 @@ public abstract class BaseIcebergMaterializedViewTest
     @Test
     public void testShowCreate()
     {
+        File tempDir = getDistributedQueryRunner().getCoordinator().getBaseDataDir().toFile();
         assertUpdate("CREATE MATERIALIZED VIEW materialized_view_with_property " +
-                "WITH (partitioning = ARRAY['_date']) AS " +
+                "WITH (\n" +
+                "   partitioning = ARRAY['_date'],\n" +
+                "   location = '" + tempDir + "/iceberg_data/tpch/materialized_view_with_property_storage_table'\n" +
+                ") AS " +
                 "SELECT _bigint, _date FROM base_table1");
         assertQuery("SELECT COUNT(*) FROM materialized_view_with_property", "VALUES 6");
         assertThat(computeActual("SHOW CREATE MATERIALIZED VIEW materialized_view_with_property").getOnlyValue())
@@ -159,6 +164,8 @@ public abstract class BaseIcebergMaterializedViewTest
                         "CREATE MATERIALIZED VIEW iceberg." + getSchemaName() + ".materialized_view_with_property\n" +
                                 "WITH (\n" +
                                 "   format = 'ORC',\n" +
+                                "   format_version = 2,\n" +
+                                "   location = '" + tempDir + "/iceberg_data/tpch/materialized_view_with_property_storage_table',\n" +
                                 "   partitioning = ARRAY['_date']\n" +
                                 ") AS\n" +
                                 "SELECT\n" +
@@ -401,9 +408,14 @@ public abstract class BaseIcebergMaterializedViewTest
     @Test
     public void testSqlFeatures()
     {
+        File tempDir = getDistributedQueryRunner().getCoordinator().getBaseDataDir().toFile();
         // Materialized views to test SQL features
-        assertUpdate("CREATE MATERIALIZED VIEW materialized_view_window WITH (partitioning = ARRAY['_date']) as select _date, " +
-                "sum(_bigint) OVER (partition by _date order by _date) as sum_ints from base_table1");
+        assertUpdate("CREATE MATERIALIZED VIEW materialized_view_window " +
+                "WITH (\n" +
+                "   partitioning = ARRAY['_date'],\n" +
+                "   location = '" + tempDir + "/iceberg_data/tpch/materialized_view_window_storage_table'\n" +
+                ") AS " +
+                "select _date, sum(_bigint) OVER (partition by _date order by _date) as sum_ints from base_table1");
         assertUpdate("REFRESH MATERIALIZED VIEW materialized_view_window", 6);
         assertUpdate("CREATE MATERIALIZED VIEW materialized_view_union WITH (partitioning = ARRAY['_date']) as " +
                 "select _date, count(_date) as num_dates from base_table1 group by 1 union " +
@@ -429,6 +441,8 @@ public abstract class BaseIcebergMaterializedViewTest
                 .isEqualTo("CREATE MATERIALIZED VIEW " + qualifiedMaterializedViewName + "\n" +
                         "WITH (\n" +
                         "   format = 'ORC',\n" +
+                        "   format_version = 2,\n" +
+                        "   location = '" + tempDir + "/iceberg_data/tpch/materialized_view_window_storage_table',\n" +
                         "   partitioning = ARRAY['_date']\n" +
                         ") AS\n" +
                         "SELECT\n" +
