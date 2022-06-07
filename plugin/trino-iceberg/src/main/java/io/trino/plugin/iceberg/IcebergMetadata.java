@@ -1202,7 +1202,7 @@ public class IcebergMetadata
             // UpdateProperties#commit will trigger any necessary metadata updates required for the new spec version
             int formatVersion = (int) properties.get(FORMAT_VERSION_PROPERTY)
                     .orElseThrow(() -> new IllegalArgumentException("The format_version property cannot be empty"));
-            updateProperties.set(FORMAT_VERSION, Integer.toString((int) formatVersion));
+            updateProperties.set(FORMAT_VERSION, Integer.toString(formatVersion));
         }
 
         try {
